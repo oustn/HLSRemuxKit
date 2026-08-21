@@ -1,0 +1,12 @@
+# macOS
+.DS_Store
+
+# Swift Package Manager and Xcode
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+
+# Generated distribution archives
+dist/
