@@ -73,6 +73,29 @@ public final class HLSRemuxer: @unchecked Sendable {
         operationState.requestCancellation()
     }
 
+    static func installSuccessfulOutput(
+        transaction: OutputTransaction,
+        output: URL,
+        startedAt: Date
+    ) throws -> HLSRemuxResult {
+        do {
+            try transaction.commit()
+        } catch OutputTransactionError.outputMissing {
+            transaction.rollback()
+            throw HLSRemuxError.outputMissing(output)
+        } catch {
+            transaction.rollback()
+            throw HLSRemuxError.failed(error.localizedDescription)
+        }
+
+        let size = (try? FileManager.default.attributesOfItem(atPath: output.path)[.size] as? NSNumber)?.int64Value ?? 0
+        return HLSRemuxResult(
+            outputURL: output,
+            sizeBytes: size,
+            durationSeconds: Date().timeIntervalSince(startedAt)
+        )
+    }
+
     private func execute(
         input: URL,
         output: URL,
@@ -129,19 +152,13 @@ public final class HLSRemuxer: @unchecked Sendable {
                         continuation.resume(throwing: HLSRemuxError.cancelled)
                     } else if state == SessionState.completed, returnCode?.isValueSuccess() == true {
                         do {
-                            try transaction.commit()
-                            let size = (try? FileManager.default.attributesOfItem(atPath: output.path)[.size] as? NSNumber)?.int64Value ?? 0
-                            continuation.resume(returning: HLSRemuxResult(
-                                outputURL: output,
-                                sizeBytes: size,
-                                durationSeconds: Date().timeIntervalSince(start)
+                            continuation.resume(returning: try Self.installSuccessfulOutput(
+                                transaction: transaction,
+                                output: output,
+                                startedAt: start
                             ))
-                        } catch OutputTransactionError.outputMissing {
-                            transaction.rollback()
-                            continuation.resume(throwing: HLSRemuxError.outputMissing(output))
                         } catch {
-                            transaction.rollback()
-                            continuation.resume(throwing: HLSRemuxError.failed(error.localizedDescription))
+                            continuation.resume(throwing: error)
                         }
                     } else {
                         transaction.rollback()
