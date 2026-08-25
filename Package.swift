@@ -68,7 +68,7 @@ let package = Package(
         ),
         .testTarget(
             name: "HLSRemuxKitTests",
-            dependencies: ["HLSRemuxCore"],
+            dependencies: ["HLSRemuxCore", "HLSRemuxKit"],
             path: "Tests/HLSRemuxKitTests"
         )
     ]

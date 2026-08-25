@@ -30,4 +30,18 @@ struct RemuxCommandTests {
         #expect(arguments.contains("copy"))
         #expect(!arguments.contains("libx264"))
     }
+
+    @Test func commandWritesOnlyToTheTransactionTemporaryURL() {
+        let destination = URL(fileURLWithPath: "/tmp/result.mp4")
+        let transaction = OutputTransaction(destination: destination)
+
+        let arguments = RemuxCommand.arguments(
+            input: URL(fileURLWithPath: "/tmp/input.ts"),
+            output: transaction.temporaryURL,
+            kind: .transportStream
+        )
+
+        #expect(arguments.last == transaction.temporaryURL.path)
+        #expect(!arguments.contains(destination.path))
+    }
 }

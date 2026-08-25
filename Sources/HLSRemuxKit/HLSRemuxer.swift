@@ -31,6 +31,7 @@ public struct HLSRemuxResult: Sendable, Equatable {
 public enum HLSRemuxError: LocalizedError, Sendable, Equatable {
     case inputMissing(URL)
     case outputParentUnavailable(URL)
+    case operationInProgress
     case failed(String)
     case cancelled
     case outputMissing(URL)
@@ -39,6 +40,7 @@ public enum HLSRemuxError: LocalizedError, Sendable, Equatable {
         switch self {
         case .inputMissing(let url): return "封装输入不存在：\(url.lastPathComponent)"
         case .outputParentUnavailable(let url): return "无法创建输出目录：\(url.path)"
+        case .operationInProgress: return "已有无损封装任务正在运行"
         case .failed(let message): return "无损封装失败：\(message)"
         case .cancelled: return "无损封装已取消"
         case .outputMissing(let url): return "封装没有生成输出文件：\(url.lastPathComponent)"
@@ -47,10 +49,7 @@ public enum HLSRemuxError: LocalizedError, Sendable, Equatable {
 }
 
 public final class HLSRemuxer: @unchecked Sendable {
-    private let lock = NSLock()
-#if canImport(ffmpegkit)
-    private var activeSession: FFmpegSession?
-#endif
+    private let operationState = OperationState()
 
     public init() {}
 
@@ -71,12 +70,7 @@ public final class HLSRemuxer: @unchecked Sendable {
     }
 
     public func cancel() {
-#if canImport(ffmpegkit)
-        lock.lock()
-        let session = activeSession
-        lock.unlock()
-        session?.cancel()
-#endif
+        operationState.requestCancellation()
     }
 
     private func execute(
@@ -86,6 +80,14 @@ public final class HLSRemuxer: @unchecked Sendable {
         progress: (@Sendable (HLSRemuxProgress) -> Void)?
     ) async throws -> HLSRemuxResult {
 #if canImport(ffmpegkit)
+        let operationID: OperationID
+        do {
+            operationID = try operationState.reserve()
+        } catch OperationStateError.operationInProgress {
+            throw HLSRemuxError.operationInProgress
+        }
+        defer { operationState.finish(operationID) }
+
         guard FileManager.default.fileExists(atPath: input.path) else {
             throw HLSRemuxError.inputMissing(input)
         }
@@ -97,38 +99,52 @@ public final class HLSRemuxer: @unchecked Sendable {
         } catch {
             throw HLSRemuxError.outputParentUnavailable(output.deletingLastPathComponent())
         }
-        try? FileManager.default.removeItem(at: output)
 
-        let arguments = RemuxCommand.arguments(input: input, output: output, kind: kind)
+        let transaction = OutputTransaction(destination: output)
+        let arguments = RemuxCommand.arguments(
+            input: input,
+            output: transaction.temporaryURL,
+            kind: kind
+        )
         let start = Date()
+
+        if Task.isCancelled {
+            operationState.requestCancellation(operationID)
+            throw HLSRemuxError.cancelled
+        }
 
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
                 let complete: FFmpegSessionCompleteCallback = { [weak self] session in
                     guard let session else {
-                        self?.clear()
+                        transaction.rollback()
                         continuation.resume(throwing: HLSRemuxError.failed("FFmpeg 会话没有返回结果"))
                         return
                     }
-                    self?.clear()
                     let state = session.getState()
-                    if state == SessionState.completed,
-                       let returnCode = session.getReturnCode(),
-                       returnCode.isValueSuccess(),
-                       FileManager.default.fileExists(atPath: output.path) {
-                        let size = (try? FileManager.default.attributesOfItem(atPath: output.path)[.size] as? NSNumber)?.int64Value ?? 0
-                        continuation.resume(returning: HLSRemuxResult(
-                            outputURL: output,
-                            sizeBytes: size,
-                            durationSeconds: Date().timeIntervalSince(start)
-                        ))
-                    } else if state == SessionState.completed,
-                              let returnCode = session.getReturnCode(),
-                              returnCode.isValueCancel() {
-                        try? FileManager.default.removeItem(at: output)
+                    let returnCode = session.getReturnCode()
+                    if self?.operationState.isCancellationRequested(for: operationID) == true ||
+                        (state == SessionState.completed && returnCode?.isValueCancel() == true) {
+                        transaction.rollback()
                         continuation.resume(throwing: HLSRemuxError.cancelled)
+                    } else if state == SessionState.completed, returnCode?.isValueSuccess() == true {
+                        do {
+                            try transaction.commit()
+                            let size = (try? FileManager.default.attributesOfItem(atPath: output.path)[.size] as? NSNumber)?.int64Value ?? 0
+                            continuation.resume(returning: HLSRemuxResult(
+                                outputURL: output,
+                                sizeBytes: size,
+                                durationSeconds: Date().timeIntervalSince(start)
+                            ))
+                        } catch OutputTransactionError.outputMissing {
+                            transaction.rollback()
+                            continuation.resume(throwing: HLSRemuxError.outputMissing(output))
+                        } catch {
+                            transaction.rollback()
+                            continuation.resume(throwing: HLSRemuxError.failed(error.localizedDescription))
+                        }
                     } else {
-                        try? FileManager.default.removeItem(at: output)
+                        transaction.rollback()
                         let details = session.getFailStackTrace() ?? session.getOutput() ?? "未知错误"
                         continuation.resume(throwing: HLSRemuxError.failed(details))
                     }
@@ -149,14 +165,17 @@ public final class HLSRemuxer: @unchecked Sendable {
                     withLogCallback: nil,
                     withStatisticsCallback: statistics
                 ) else {
+                    transaction.rollback()
                     continuation.resume(throwing: HLSRemuxError.failed("无法创建 FFmpeg 会话"))
                     return
                 }
-                self.set(session: session)
+                self.operationState.registerCancellation({ [weak session] in
+                    session?.cancel()
+                }, for: operationID)
                 progress?(HLSRemuxProgress(processedBytes: 0, elapsedSeconds: 0, speed: 0))
             }
         }, onCancel: { [weak self] in
-            self?.cancel()
+            self?.operationState.requestCancellation(operationID)
         })
 #else
         _ = (input, output, kind, progress)
@@ -164,17 +183,4 @@ public final class HLSRemuxer: @unchecked Sendable {
 #endif
     }
 
-#if canImport(ffmpegkit)
-    private func set(session: FFmpegSession) {
-        lock.lock()
-        activeSession = session
-        lock.unlock()
-    }
-
-    private func clear() {
-        lock.lock()
-        activeSession = nil
-        lock.unlock()
-    }
-#endif
 }

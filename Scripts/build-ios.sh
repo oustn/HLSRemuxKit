@@ -22,7 +22,7 @@ check_target() {
     -emit-module \
     -emit-module-path "${scratch}/HLSRemuxCore.swiftmodule" \
     -module-name HLSRemuxCore \
-    "${ROOT_DIR}/Sources/HLSRemuxCore/RemuxCommand.swift"
+    "${ROOT_DIR}"/Sources/HLSRemuxCore/*.swift
 
   local framework_flags=()
   for framework in ffmpegkit libavcodec libavdevice libavfilter libavformat libavutil libswresample libswscale; do
