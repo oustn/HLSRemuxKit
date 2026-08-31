@@ -43,4 +43,8 @@ Physical-device execution remains an optional manual validation step. The automa
 
 The public Swift API only depends on FFmpegKit's execute and cancel calls. A future build produced from `ffmpeg-kit-next` can replace the archives in `Vendor/FFmpegKitNext` as long as it keeps the same framework names and iOS 16-compatible arm64 slices. Run `Scripts/build-ios.sh` after replacement to execute host tests, check both iOS slices, and run the simulator integration suite.
 
+### Binary symbols
+
+The archives must include UUID-matched dSYM bundles for both supported slices. `Scripts/build-ios.sh` rejects stripped vendor archives before compiling. To produce a replacement payload, build FFmpegKitNext from the pinned source tag with `Scripts/build-ffmpegkitnext-with-dsym.sh`, then copy only the output that passes `Scripts/verify-vendor-dsym.sh` into `Vendor/FFmpegKitNext`. See `Vendor/FFmpegKitNext/README.md` for the supply procedure. dSYM files cannot be reconstructed from the historical stripped binaries.
+
 See `LICENSES/NOTICE.md` for the vendor release and LGPL obligations.

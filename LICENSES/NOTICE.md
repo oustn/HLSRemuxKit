@@ -9,3 +9,9 @@ They contain the FFmpegKitNext wrapper 8.1.1 with FFmpeg 8.1.2 libraries under t
 <https://github.com/arthenica/ffmpeg-kit-next>
 
 The app distributing this package must preserve the LGPL notices and provide the corresponding source offer required by LGPL-3.0.
+
+The 2026-07-31 archives are retained as historical provenance only and do not
+contain usable dSYM files. Release archives must be rebuilt from the pinned
+`v8.1.1` source with debug information enabled and verified with
+`Scripts/verify-vendor-dsym.sh`; no dSYM may be fabricated or mixed from a
+different binary build.

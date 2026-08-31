@@ -11,6 +11,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# TestFlight requires UUID-matched symbols for every embedded binary. Fail
+# before compiling if the vendored payload is still the historical stripped
+# build; see build-ffmpegkitnext-with-dsym.sh for the source rebuild.
+"${ROOT_DIR}/Scripts/verify-vendor-dsym.sh" "${ROOT_DIR}/Vendor/FFmpegKitNext"
+
 for archive in "${ROOT_DIR}"/Vendor/FFmpegKitNext/*.xcframework.zip; do
   unzip -q -o "${archive}" -d "${VENDOR_DIR}"
 done
